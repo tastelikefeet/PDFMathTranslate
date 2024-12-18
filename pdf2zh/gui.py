@@ -325,8 +325,12 @@ with gr.Blocks(
                 for i in range(3):
                     _envs.append(gr.update(visible=False, value=""))
                 for i, env in enumerate(translator.envs.items()):
+                    if env[0] == 'MODELSCOPE_API_KEY':
+                        label = 'MODELSCOPE_API_KEY(免费使用:https://www.modelscope.cn/my/myaccesstoken)'
+                    else:
+                        label = env[0]
                     _envs[i] = gr.update(
-                        visible=True, label=env[0], value=os.getenv(env[0], env[1])
+                        visible=True, label=label, value=os.getenv(env[0], env[1])
                     )
                 return _envs
 
