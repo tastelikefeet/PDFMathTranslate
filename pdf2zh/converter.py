@@ -346,6 +346,7 @@ class TranslateConverter(PDFConverterEx):
             except BaseException as e:
                 import traceback
                 print(traceback.format_exc())
+                print(self.translator.__class__)
                 raise e
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self.thread
