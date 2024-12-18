@@ -344,10 +344,8 @@ class TranslateConverter(PDFConverterEx):
                     cache.write_paragraph(hash_key, hash_key_paragraph, new)
                 return new
             except BaseException as e:
-                if log.isEnabledFor(logging.DEBUG):
-                    log.exception(e)
-                else:
-                    log.exception(e, exc_info=False)
+                import traceback
+                print(traceback.format_exc())
                 raise e
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self.thread

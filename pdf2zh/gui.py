@@ -292,7 +292,7 @@ with gr.Blocks(
             service = gr.Dropdown(
                 label="Service",
                 choices=service_map.keys(),
-                value="Google",
+                value="ModelScope",
             )
             envs = []
             for i in range(3):
@@ -440,6 +440,7 @@ with gr.Blocks(
         stop_translate_file,
         inputs=[state],
     )
+    demo.load(on_select_service, service, envs)
 
 
 def readuserandpasswd(file_path):
