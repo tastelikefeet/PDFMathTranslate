@@ -363,7 +363,7 @@ with gr.Blocks(
 ) as demo:
     gr.Markdown(
         "# [PDFMathTranslate @ GitHub](https://github.com/Byaidu/PDFMathTranslate)"
-        "如遇到排队或错误，请点击上方复制该创空间使用（cpu资源即可，免费）"
+        "如遇到排队或错误，请点击上方复制该创空间使用（免费cpu资源即可）"
     )
 
     with gr.Row():
