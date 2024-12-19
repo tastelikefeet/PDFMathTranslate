@@ -231,7 +231,7 @@ def translate_stream(
 
     fp = io.BytesIO()
     doc_zh.save(fp)
-    obj_patch: dict = translate_patch(fp, prompt=kwarg["prompt"], **locals())
+    obj_patch: dict = translate_patch(fp, prompt=kwarg["prompt"], envs=kwarg.get('envs'), **locals())
 
     for obj_id, ops_new in obj_patch.items():
         # ops_old=doc_en.xref_stream(obj_id)
