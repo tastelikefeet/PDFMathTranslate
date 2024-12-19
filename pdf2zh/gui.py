@@ -363,6 +363,7 @@ with gr.Blocks(
 ) as demo:
     gr.Markdown(
         "# [PDFMathTranslate @ GitHub](https://github.com/Byaidu/PDFMathTranslate)"
+        "如遇到排队或错误，请点击上方复制该创空间使用（cpu资源即可，免费）"
     )
 
     with gr.Row():
@@ -439,7 +440,7 @@ with gr.Blocks(
                     _envs.append(gr.update(visible=False, value=""))
                 for i, env in enumerate(translator.envs.items()):
                     if env[0] == 'MODELSCOPE_API_KEY':
-                        label = 'MODELSCOPE_API_KEY(免费使用:https://www.modelscope.cn/my/myaccesstoken)'
+                        label = 'MODELSCOPE_API_KEY(必填，免费使用:https://www.modelscope.cn/my/myaccesstoken)'
                     else:
                         label = env[0]
                     _envs[i] = gr.update(
