@@ -26,6 +26,7 @@ class BaseTranslator:
     name = "base"
     envs = {}
     lang_map = {}
+    CustomPrompt = False
 
     def __init__(self, lang_in, lang_out, model):
         lang_in = self.lang_map.get(lang_in.lower(), lang_in)
@@ -49,17 +50,25 @@ class BaseTranslator:
     def translate(self, text):
         pass
 
-    def prompt(self, text):
-        return [
-            {
-                "role": "system",
-                "content": "You are a professional,authentic machine translation engine.",
-            },
-            {
-                "role": "user",
-                "content": f"Translate the following markdown source text to {self.lang_out}. Keep the formula notation {{v*}} unchanged. Output translation directly without any additional text.\nSource Text: {text}\nTranslated Text:",  # noqa: E501
-            },
-        ]
+    def prompt(self, text, prompt):
+        if prompt:
+            context = {
+                "lang_in": self.lang_in,
+                "lang_out": self.lang_out,
+                "text": text,
+            }
+            return eval(prompt.safe_substitute(context))
+        else:
+            return [
+                {
+                    "role": "system",
+                    "content": "You are a professional,authentic machine translation engine.",
+                },
+                {
+                    "role": "user",
+                    "content": f"Translate the following markdown source text to {self.lang_out}. Keep the formula notation {{v*}} unchanged. Output translation directly without any additional text.\nSource Text: {text}\nTranslated Text:",  # noqa: E501
+                },
+            ]
 
     def __str__(self):
         return f"{self.name} {self.lang_in} {self.lang_out} {self.model}"
@@ -145,7 +154,7 @@ class DeepLTranslator(BaseTranslator):
     }
     lang_map = {"zh": "zh-Hans"}
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, **kwargs):
         self.set_envs(envs)
         super().__init__(lang_in, lang_out, model)
         auth_key = self.envs["DEEPL_AUTH_KEY"]
@@ -166,7 +175,7 @@ class DeepLXTranslator(BaseTranslator):
     }
     lang_map = {"zh": "zh-Hans"}
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, **kwargs):
         self.set_envs(envs)
         super().__init__(lang_in, lang_out, model)
         self.endpoint = self.envs["DEEPLX_ENDPOINT"]
@@ -192,20 +201,25 @@ class OllamaTranslator(BaseTranslator):
         "OLLAMA_HOST": "http://127.0.0.1:11434",
         "OLLAMA_MODEL": "gemma2",
     }
+    CustomPrompt = True
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, prompt=None):
         self.set_envs(envs)
         if not model:
             model = self.envs["OLLAMA_MODEL"]
         super().__init__(lang_in, lang_out, model)
         self.options = {"temperature": 0}  # 随机采样可能会打断公式标记
         self.client = ollama.Client()
+        self.prompttext = prompt
 
     def translate(self, text):
+        print(len(self.prompt(text, self.prompttext)))
+        print(self.prompt(text, self.prompttext)[0])
+        print(self.prompt(text, self.prompttext)[1])
         response = self.client.chat(
             model=self.model,
             options=self.options,
-            messages=self.prompt(text),
+            messages=self.prompt(text, self.prompttext),
         )
         return response["message"]["content"].strip()
 
@@ -218,9 +232,17 @@ class OpenAITranslator(BaseTranslator):
         "OPENAI_API_KEY": None,
         "OPENAI_MODEL": "gpt-4o-mini",
     }
+    CustomPrompt = True
 
     def __init__(
-        self, lang_in, lang_out, model, base_url=None, api_key=None, envs=None
+        self,
+        lang_in,
+        lang_out,
+        model,
+        base_url=None,
+        api_key=None,
+        envs=None,
+        prompt=None,
     ):
         self.set_envs(envs)
         if not model:
@@ -228,12 +250,13 @@ class OpenAITranslator(BaseTranslator):
         super().__init__(lang_in, lang_out, model)
         self.options = {"temperature": 0}  # 随机采样可能会打断公式标记
         self.client = openai.OpenAI(base_url=base_url, api_key=api_key)
+        self.prompttext = prompt
 
     def translate(self, text) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             **self.options,
-            messages=self.prompt(text),
+            messages=self.prompt(text, self.prompttext),
         )
         return response.choices[0].message.content.strip()
 
@@ -245,9 +268,17 @@ class AzureOpenAITranslator(BaseTranslator):
         "AZURE_OPENAI_API_KEY": None,
         "AZURE_OPENAI_MODEL": "gpt-4o-mini",
     }
+    CustomPrompt = True
 
     def __init__(
-        self, lang_in, lang_out, model, base_url=None, api_key=None, envs=None
+        self,
+        lang_in,
+        lang_out,
+        model,
+        base_url=None,
+        api_key=None,
+        envs=None,
+        prompt=None,
     ):
         self.set_envs(envs)
         base_url = self.envs["AZURE_OPENAI_BASE_URL"]
@@ -261,12 +292,13 @@ class AzureOpenAITranslator(BaseTranslator):
             api_version="2024-06-01",
             api_key=api_key,
         )
+        self.prompttext = prompt
 
     def translate(self, text) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             **self.options,
-            messages=self.prompt(text),
+            messages=self.prompt(text, self.prompttext),
         )
         return response.choices[0].message.content.strip()
 
@@ -278,9 +310,17 @@ class ModelScopeTranslator(OpenAITranslator):
         "MODELSCOPE_API_KEY": None,
         "MODELSCOPE_MODEL": "Qwen/Qwen2.5-32B-Instruct",
     }
+    CustomPrompt = True
 
     def __init__(
-        self, lang_in, lang_out, model, base_url=None, api_key=None, envs=None
+        self,
+        lang_in,
+        lang_out,
+        model,
+        base_url=None,
+        api_key=None,
+        envs=None,
+        prompt=None,
     ):
         self.set_envs(envs)
         base_url = "https://api-inference.modelscope.cn/v1"
@@ -288,6 +328,7 @@ class ModelScopeTranslator(OpenAITranslator):
         if not model:
             model = self.envs["MODELSCOPE_MODEL"]
         super().__init__(lang_in, lang_out, model, base_url=base_url, api_key=api_key)
+        self.prompttext = prompt
 
 
 class ZhipuTranslator(OpenAITranslator):
@@ -297,21 +338,23 @@ class ZhipuTranslator(OpenAITranslator):
         "ZHIPU_API_KEY": None,
         "ZHIPU_MODEL": "glm-4-flash",
     }
+    CustomPrompt = True
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, prompt=None):
         self.set_envs(envs)
         base_url = "https://open.bigmodel.cn/api/paas/v4"
         api_key = self.envs["ZHIPU_API_KEY"]
         if not model:
             model = self.envs["ZHIPU_MODEL"]
         super().__init__(lang_in, lang_out, model, base_url=base_url, api_key=api_key)
+        self.prompttext = prompt
 
     def translate(self, text) -> str:
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 **self.options,
-                messages=self.prompt(text),
+                messages=self.prompt(text, self.prompttext),
             )
         except openai.BadRequestError as e:
             if (
@@ -330,14 +373,16 @@ class SiliconTranslator(OpenAITranslator):
         "SILICON_API_KEY": None,
         "SILICON_MODEL": "Qwen/Qwen2.5-7B-Instruct",
     }
+    CustomPrompt = True
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, prompt=None):
         self.set_envs(envs)
         base_url = "https://api.siliconflow.cn/v1"
         api_key = self.envs["SILICON_API_KEY"]
         if not model:
             model = self.envs["SILICON_MODEL"]
         super().__init__(lang_in, lang_out, model, base_url=base_url, api_key=api_key)
+        self.prompttext = prompt
 
 
 class GeminiTranslator(OpenAITranslator):
@@ -347,14 +392,16 @@ class GeminiTranslator(OpenAITranslator):
         "GEMINI_API_KEY": None,
         "GEMINI_MODEL": "gemini-1.5-flash",
     }
+    CustomPrompt = True
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, prompt=None):
         self.set_envs(envs)
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
         api_key = self.envs["GEMINI_API_KEY"]
         if not model:
             model = self.envs["GEMINI_MODEL"]
         super().__init__(lang_in, lang_out, model, base_url=base_url, api_key=api_key)
+        self.prompttext = prompt
 
 
 class AzureTranslator(BaseTranslator):
@@ -366,7 +413,7 @@ class AzureTranslator(BaseTranslator):
     }
     lang_map = {"zh": "zh-Hans"}
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, **kwargs):
         self.set_envs(envs)
         super().__init__(lang_in, lang_out, model)
         endpoint = self.envs["AZURE_ENDPOINT"]
@@ -397,7 +444,7 @@ class TencentTranslator(BaseTranslator):
         "TENCENTCLOUD_SECRET_KEY": None,
     }
 
-    def __init__(self, lang_in, lang_out, model, envs=None):
+    def __init__(self, lang_in, lang_out, model, envs=None, **kwargs):
         self.set_envs(envs)
         super().__init__(lang_in, lang_out, model)
         cred = credential.DefaultCredentialProvider().get_credential()
@@ -419,8 +466,9 @@ class AnythingLLMTranslator(BaseTranslator):
         "AnythingLLM_URL": None,
         "AnythingLLM_APIKEY": None,
     }
+    CustomPrompt = True
 
-    def __init__(self, lang_out, lang_in, model, envs=None):
+    def __init__(self, lang_out, lang_in, model, envs=None, prompt=None):
         self.set_envs(envs)
         super().__init__(lang_out, lang_in, model)
         self.api_url = self.envs["AnythingLLM_URL"]
@@ -430,9 +478,10 @@ class AnythingLLMTranslator(BaseTranslator):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        self.prompttext = prompt
 
     def translate(self, text):
-        messages = self.prompt(text)
+        messages = self.prompt(text, self.prompttext)
         payload = {
             "message": messages,
             "mode": "chat",
@@ -456,7 +505,7 @@ class DifyTranslator(BaseTranslator):
         "DIFY_API_KEY": None,  # 替换为实际 API 密钥
     }
 
-    def __init__(self, lang_out, lang_in, model, envs=None):
+    def __init__(self, lang_out, lang_in, model, envs=None, **kwargs):
         self.set_envs(envs)
         super().__init__(lang_out, lang_in, model)
         self.api_url = self.envs["DIFY_API_URL"]
