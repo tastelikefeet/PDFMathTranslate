@@ -8,7 +8,7 @@ import tempfile
 import urllib.request
 from asyncio import CancelledError
 from pathlib import Path
-from typing import Any, BinaryIO, List, Optional
+from typing import Any, BinaryIO, List, Optional, Dict
 
 import numpy as np
 import requests
@@ -21,10 +21,8 @@ from pdfminer.pdfparser import PDFParser
 from pymupdf import Document, Font
 
 from pdf2zh.converter import TranslateConverter
-from pdf2zh.doclayout import DocLayoutModel
+from pdf2zh.doclayout import OnnxModel
 from pdf2zh.pdfinterp import PDFPageInterpreterEx
-
-model = DocLayoutModel.load_available()
 
 resfont_map = {
     "zh-cn": "china-ss",
@@ -88,6 +86,9 @@ def translate_patch(
     noto: Font = None,
     callback: object = None,
     cancellation_event: asyncio.Event = None,
+    model: OnnxModel = None,
+    envs: Dict = None,
+    prompt: List = None,
     **kwarg: Any,
 ) -> None:
     rsrcmgr = PDFResourceManager()
@@ -103,8 +104,8 @@ def translate_patch(
         service,
         resfont,
         noto,
-        kwarg.get("envs", {}),
-        kwarg.get("prompt", []),
+        envs,
+        prompt,
     )
 
     assert device is not None
@@ -179,6 +180,9 @@ def translate_stream(
     vchar: str = "",
     callback: object = None,
     cancellation_event: asyncio.Event = None,
+    model: OnnxModel = None,
+    envs: Dict = None,
+    prompt: List = None,
     **kwarg: Any,
 ):
     font_list = [("tiro", None)]
@@ -189,7 +193,8 @@ def translate_stream(
     elif lang_out.lower() in noto_list:  # noto
         resfont = "noto"
         # docker
-        ttf_path = "/app/GoNotoKurrent-Regular.ttf"
+        ttf_path = os.environ.get("NOTO_FONT_PATH", "/app/GoNotoKurrent-Regular.ttf")
+
         if not os.path.exists(ttf_path):
             ttf_path = os.path.join(tempfile.gettempdir(), "GoNotoKurrent-Regular.ttf")
         if not os.path.exists(ttf_path):
@@ -205,6 +210,8 @@ def translate_stream(
         font_list.append(("china-ss", None))
 
     doc_en = Document(stream=stream)
+    stream = io.BytesIO()
+    doc_en.save(stream)
     doc_zh = Document(stream=stream)
     page_count = doc_zh.page_count
     # font_list = [("china-ss", None), ("tiro", None)]
@@ -231,7 +238,7 @@ def translate_stream(
 
     fp = io.BytesIO()
     doc_zh.save(fp)
-    obj_patch: dict = translate_patch(fp, prompt=kwarg["prompt"], envs=kwarg.get('envs', {}), **locals())
+    obj_patch: dict = translate_patch(fp, **locals())
 
     for obj_id, ops_new in obj_patch.items():
         # ops_old=doc_en.xref_stream(obj_id)
@@ -309,6 +316,9 @@ def translate(
     callback: object = None,
     compatible: bool = False,
     cancellation_event: asyncio.Event = None,
+    model: OnnxModel = None,
+    envs: Dict = None,
+    prompt: List = None,
     **kwarg: Any,
 ):
     if not files:
@@ -330,13 +340,12 @@ def translate(
             try:
                 r = requests.get(file, allow_redirects=True)
                 if r.status_code == 200:
-                    if not os.path.exists("./pdf2zh_files"):
-                        print("Making a temporary dir for downloading PDF files...")
-                        os.mkdir(os.path.dirname("./pdf2zh_files"))
-                    with open("./pdf2zh_files/tmp_download.pdf", "wb") as f:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".pdf", delete=False
+                    ) as tmp_file:
                         print(f"Writing the file: {file}...")
-                        f.write(r.content)
-                    file = "./pdf2zh_files/tmp_download.pdf"
+                        tmp_file.write(r.content)
+                        file = tmp_file.name
                 else:
                     r.raise_for_status()
             except Exception as e:
@@ -348,17 +357,22 @@ def translate(
         # If the commandline has specified converting to PDF/A format
         # --compatible / -cp
         if compatible:
-            file_pdfa = file.replace(".pdf", "-pdfa.pdf")
-            print(f"Converting {file} to PDF/A format...")
-            convert_to_pdfa(file, file_pdfa)
-            doc_raw = open(file_pdfa, "rb")
+            with tempfile.NamedTemporaryFile(
+                suffix="-pdfa.pdf", delete=False
+            ) as tmp_pdfa:
+                print(f"Converting {file} to PDF/A format...")
+                convert_to_pdfa(file, tmp_pdfa.name)
+                doc_raw = open(tmp_pdfa.name, "rb")
+                os.unlink(tmp_pdfa.name)
         else:
             doc_raw = open(file, "rb")
         s_raw = doc_raw.read()
+        doc_raw.close()
+
+        if file.startswith(tempfile.gettempdir()):
+            os.unlink(file)
         s_mono, s_dual = translate_stream(
             s_raw,
-            envs=kwarg.get("envs", {}),
-            prompt=kwarg.get("prompt", []),
             **locals(),
         )
         file_mono = Path(output) / f"{filename}-mono.pdf"
@@ -367,7 +381,8 @@ def translate(
         doc_dual = open(file_dual, "wb")
         doc_mono.write(s_mono)
         doc_dual.write(s_dual)
+        doc_mono.close()
+        doc_dual.close()
         result_files.append((str(file_mono), str(file_dual)))
 
-    return result_files
     return result_files

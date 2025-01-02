@@ -41,8 +41,11 @@ PDF scientific paper translation and bilingual comparison.
 
 Feel free to provide feedback in [GitHub Issues](https://github.com/Byaidu/PDFMathTranslate/issues), [Telegram Group](https://t.me/+Z9_SgnxmsmA5NzBl) or [QQ Group](https://qm.qq.com/q/DixZCxQej0).
 
+For details on how to contribute, please consult the [Contribution Guide](https://github.com/Byaidu/PDFMathTranslate/wiki/Contribution-Guide---%E8%B4%A1%E7%8C%AE%E6%8C%87%E5%8D%97).
+
 <h2 id="updates">Updates</h2>
 
+- [Dec. 24 2024] The translator now supports local models on [Xinference](https://github.com/xorbitsai/inference) _(by [@imClumsyPanda](https://github.com/imClumsyPanda))_
 - [Dec. 19 2024] Non-PDF/A documents are now supported using `-cp` _(by [@reycn](https://github.com/reycn))_
 - [Dec. 13 2024] Additional support for backend by _(by [@YadominJinta](https://github.com/YadominJinta))_
 - [Dec. 10 2024] The translator now supports OpenAI models on Azure _(by [@yidasanqian](https://github.com/yidasanqian))_
@@ -186,8 +189,10 @@ In the following table, we list all advanced options for reference:
 | `-f`, `-c`     | [Exceptions](https://github.com/Byaidu/PDFMathTranslate/blob/main/docs/ADVANCED.md#exceptions)                | `pdf2zh example.pdf -f "(MS.*)"`               |
 | `-cp`          | Compatibility Mode                                                                                            | `pdf2zh example.pdf --compatible`              |
 | `--share`      | Public link                                                                                                   | `pdf2zh -i --share`                            |
-| `--authorized` | Authorization                                                                                                 | `pdf2zh -i --authorized users.txt [auth.html]` |
+| `--authorized` | [Authorization](https://github.com/Byaidu/PDFMathTranslate/blob/main/docs/ADVANCED.md#auth)                                                                                                 | `pdf2zh -i --authorized users.txt [auth.html]` |
 | `--prompt`     | [Custom Prompt](https://github.com/Byaidu/PDFMathTranslate/blob/main/docs/ADVANCED.md#prompt)                 | `pdf2zh --prompt [prompt.txt]`                 |
+| `--onnx` | [Use Custom DocLayout-YOLO ONNX model] | `pdf2zh --onnx [onnx/model/path]` |
+| `--serverport` | [Use Custom WebUI port] | `pdf2zh --serverport 7860` |
 
 For detailed explanations, please refer to our document about [Advanced Usage](./docs/ADVANCED.md) for a full list of each option.
 
@@ -221,6 +226,8 @@ For downstream applications, please refer to our document about [API Details](./
 - Document parsing: [Pdfminer.six](https://github.com/pdfminer/pdfminer.six)
 
 - Document extraction: [MinerU](https://github.com/opendatalab/MinerU)
+
+- Document Preview: [Gradio PDF](https://github.com/freddyaboulton/gradio-pdf)
 
 - Multi-threaded translation: [MathTranslate](https://github.com/SUSYUSTC/MathTranslate)
 
