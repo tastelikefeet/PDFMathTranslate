@@ -5,15 +5,19 @@ import shutil
 import uuid
 from asyncio import CancelledError
 from pathlib import Path
+import typing as T
 
 import gradio as gr
 import requests
 import tqdm
 from gradio_pdf import PDF
+from string import Template
+import logging
 
 from pdf2zh import __version__
 from pdf2zh.high_level import translate
-from pdf2zh.pdf2zh import model
+from pdf2zh.doclayout import ModelInstance
+from pdf2zh.config import ConfigManager
 from pdf2zh.translator import (
     AnythingLLMTranslator,
     AzureOpenAITranslator,
@@ -33,11 +37,18 @@ from pdf2zh.translator import (
     TencentTranslator,
     XinferenceTranslator,
     ZhipuTranslator,
-    GorkTranslator,
+    GrokTranslator,
+    GroqTranslator,
     DeepseekTranslator,
     OpenAIlikedTranslator,
+    QwenMtTranslator,
 )
+from babeldoc.docvision.doclayout import OnnxModel
+from babeldoc import __version__ as babeldoc_version
 
+logger = logging.getLogger(__name__)
+
+BABELDOC_MODEL = OnnxModel.load_available()
 # The following variables associate strings with translators
 service_map: dict[str, BaseTranslator] = {
     "Google": GoogleTranslator,
@@ -57,9 +68,11 @@ service_map: dict[str, BaseTranslator] = {
     "Dify": DifyTranslator,
     "AnythingLLM": AnythingLLMTranslator,
     "Argos Translate": ArgosTranslator,
-    "Gork": GorkTranslator,
+    "Grok": GrokTranslator,
+    "Groq": GroqTranslator,
     "DeepSeek": DeepseekTranslator,
     "OpenAI-liked": OpenAIlikedTranslator,
+    "Ali Qwen-Translation": QwenMtTranslator,
 }
 
 # The following variables associate strings with specific languages
@@ -88,7 +101,7 @@ page_map = {
 flag_demo = False
 
 # Limit resources
-if os.getenv("PDF2ZH_DEMO"):
+if ConfigManager.get("PDF2ZH_DEMO"):
     flag_demo = True
     service_map = {
         "Google": GoogleTranslator,
@@ -97,8 +110,29 @@ if os.getenv("PDF2ZH_DEMO"):
         "First": [0],
         "First 20 pages": list(range(0, 20)),
     }
-    client_key = os.getenv("PDF2ZH_CLIENT_KEY")
-    server_key = os.getenv("PDF2ZH_SERVER_KEY")
+    client_key = ConfigManager.get("PDF2ZH_CLIENT_KEY")
+    server_key = ConfigManager.get("PDF2ZH_SERVER_KEY")
+
+
+# Limit Enabled Services
+enabled_services: T.Optional[T.List[str]] = ConfigManager.get("ENABLED_SERVICES")
+if isinstance(enabled_services, list):
+    default_services = ["Google", "Bing"]
+    enabled_services_names = [str(_).lower().strip() for _ in enabled_services]
+    enabled_services = [
+        k
+        for k in service_map.keys()
+        if str(k).lower().strip() in enabled_services_names
+    ]
+    if len(enabled_services) == 0:
+        raise RuntimeError("No services available.")
+    enabled_services = default_services + enabled_services
+else:
+    enabled_services = list(service_map.keys())
+
+
+# Configure about Gradio show keys
+hidden_gradio_details: bool = bool(ConfigManager.get("HIDDEN_GRADIO_DETAILS"))
 
 
 # Public demo control
@@ -107,10 +141,8 @@ def verify_recaptcha(response):
     This function verifies the reCAPTCHA response.
     """
     recaptcha_url = "https://www.google.com/recaptcha/api/siteverify"
-    print("reCAPTCHA", server_key, response)
     data = {"secret": server_key, "response": response}
     result = requests.post(recaptcha_url, data=data).json()
-    print("reCAPTCHA", result.get("success"))
     return result.get("success")
 
 
@@ -136,6 +168,7 @@ def download_with_limit(url: str, save_path: str, size_limit: int) -> str:
             filename = params["filename"]
         except Exception:  # filename from url
             filename = os.path.basename(url)
+        filename = os.path.splitext(os.path.basename(filename))[0] + ".pdf"
         with open(save_path / filename, "wb") as file:
             for chunk in response.iter_content(chunk_size=chunk_size):
                 total_size += len(chunk)
@@ -158,6 +191,7 @@ def stop_translate_file(state: dict) -> None:
     if session_id is None:
         return
     if session_id in cancellation_event_map:
+        logger.info(f"Stopping translation for session {session_id}")
         cancellation_event_map[session_id].set()
 
 
@@ -172,6 +206,10 @@ def translate_file(
     page_input,
     prompt,
     threads,
+    skip_subset_fonts,
+    ignore_cache,
+    vfont,
+    use_babeldoc,
     recaptcha_response,
     state,
     progress=gr.Progress(),
@@ -251,11 +289,21 @@ def translate_file(
     _envs = {}
     for i, env in enumerate(translator.envs.items()):
         _envs[env[0]] = envs[i]
+    for k, v in _envs.items():
+        if str(k).upper().endswith("API_KEY") and str(v) == "***":
+            # Load Real API_KEYs from local configure file
+            real_keys: str = ConfigManager.get_env_by_translatername(
+                translator, k, None
+            )
+            _envs[k] = real_keys
 
     print(f"Files before translation: {os.listdir(output)}")
 
     def progress_bar(t: tqdm.tqdm):
-        progress(t.n / t.total, desc="Translating...")
+        desc = getattr(t, "desc", "Translating...")
+        if desc == "":
+            desc = "Translating..."
+        progress(t.n / t.total, desc=desc)
 
     try:
         threads = int(threads)
@@ -273,10 +321,16 @@ def translate_file(
         "callback": progress_bar,
         "cancellation_event": cancellation_event_map[session_id],
         "envs": _envs,
-        "prompt": prompt,
-        "model": model,
+        "prompt": Template(prompt) if prompt else None,
+        "skip_subset_fonts": skip_subset_fonts,
+        "ignore_cache": ignore_cache,
+        "vfont": vfont,  # 添加自定义公式字体正则表达式
+        "model": ModelInstance.value,
     }
+
     try:
+        if use_babeldoc:
+            return babeldoc_translate_file(**param)
         translate(**param)
     except CancelledError:
         del cancellation_event_map[session_id]
@@ -296,6 +350,111 @@ def translate_file(
         gr.update(visible=True),
         gr.update(visible=True),
     )
+
+
+def babeldoc_translate_file(**kwargs):
+    from babeldoc.high_level import init as babeldoc_init
+
+    babeldoc_init()
+    from babeldoc.high_level import async_translate as babeldoc_translate
+    from babeldoc.translation_config import TranslationConfig as YadtConfig
+
+    for translator in [
+        GoogleTranslator,
+        BingTranslator,
+        DeepLTranslator,
+        DeepLXTranslator,
+        OllamaTranslator,
+        XinferenceTranslator,
+        AzureOpenAITranslator,
+        OpenAITranslator,
+        ZhipuTranslator,
+        ModelScopeTranslator,
+        SiliconTranslator,
+        GeminiTranslator,
+        AzureTranslator,
+        TencentTranslator,
+        DifyTranslator,
+        AnythingLLMTranslator,
+        ArgosTranslator,
+        GrokTranslator,
+        GroqTranslator,
+        DeepseekTranslator,
+        OpenAIlikedTranslator,
+        QwenMtTranslator,
+    ]:
+        if kwargs["service"] == translator.name:
+            translator = translator(
+                kwargs["lang_in"],
+                kwargs["lang_out"],
+                "",
+                envs=kwargs["envs"],
+                prompt=kwargs["prompt"],
+                ignore_cache=kwargs["ignore_cache"],
+            )
+            break
+    else:
+        raise ValueError("Unsupported translation service")
+    import asyncio
+    from babeldoc.main import create_progress_handler
+
+    for file in kwargs["files"]:
+        file = file.strip("\"'")
+        yadt_config = YadtConfig(
+            input_file=file,
+            font=None,
+            pages=",".join((str(x) for x in getattr(kwargs, "raw_pages", []))),
+            output_dir=kwargs["output"],
+            doc_layout_model=BABELDOC_MODEL,
+            translator=translator,
+            debug=False,
+            lang_in=kwargs["lang_in"],
+            lang_out=kwargs["lang_out"],
+            no_dual=False,
+            no_mono=False,
+            qps=kwargs["thread"],
+            use_rich_pbar=False,
+            disable_rich_text_translate=not isinstance(translator, OpenAITranslator),
+            skip_clean=kwargs["skip_subset_fonts"],
+            report_interval=0.5,
+        )
+
+        async def yadt_translate_coro(yadt_config):
+            progress_context, progress_handler = create_progress_handler(yadt_config)
+
+            # 开始翻译
+            with progress_context:
+                async for event in babeldoc_translate(yadt_config):
+                    progress_handler(event)
+                    if yadt_config.debug:
+                        logger.debug(event)
+                    kwargs["callback"](progress_context)
+                    if kwargs["cancellation_event"].is_set():
+                        yadt_config.cancel_translation()
+                        raise CancelledError
+                    if event["type"] == "finish":
+                        result = event["translate_result"]
+                        logger.info("Translation Result:")
+                        logger.info(f"  Original PDF: {result.original_pdf_path}")
+                        logger.info(f"  Time Cost: {result.total_seconds:.2f}s")
+                        logger.info(f"  Mono PDF: {result.mono_pdf_path or 'None'}")
+                        logger.info(f"  Dual PDF: {result.dual_pdf_path or 'None'}")
+                        file_mono = result.mono_pdf_path
+                        file_dual = result.dual_pdf_path
+                        break
+            import gc
+
+            gc.collect()
+            return (
+                str(file_mono),
+                str(file_mono),
+                str(file_dual),
+                gr.update(visible=True),
+                gr.update(visible=True),
+                gr.update(visible=True),
+            )
+
+        return asyncio.run(yadt_translate_coro(yadt_config))
 
 
 # Global setup
@@ -352,8 +511,10 @@ demo_recaptcha = """
 tech_details_string = f"""
                     <summary>Technical details</summary>
                     - GitHub: <a href="https://github.com/Byaidu/PDFMathTranslate">Byaidu/PDFMathTranslate</a><br>
+                    - BabelDOC: <a href="https://github.com/funstory-ai/BabelDOC">funstory-ai/BabelDOC</a><br>
                     - GUI by: <a href="https://github.com/reycn">Rongxin</a><br>
-                    - Version: {__version__}
+                    - pdf2zh Version: {__version__} <br>
+                    - BabelDOC Version: {babeldoc_version}
                 """
 cancellation_event_map = {}
 
@@ -395,7 +556,7 @@ with gr.Blocks(
             gr.Markdown("## Option")
             service = gr.Dropdown(
                 label="Service",
-                choices=service_map.keys(),
+                choices=enabled_services,
                 value="ModelScope",
             )
             envs = []
@@ -410,12 +571,12 @@ with gr.Blocks(
                 lang_from = gr.Dropdown(
                     label="Translate from",
                     choices=lang_map.keys(),
-                    value="English",
+                    value=ConfigManager.get("PDF2ZH_LANG_FROM", "English"),
                 )
                 lang_to = gr.Dropdown(
                     label="Translate to",
                     choices=lang_map.keys(),
-                    value="Simplified Chinese",
+                    value=ConfigManager.get("PDF2ZH_LANG_TO", "Simplified Chinese"),
                 )
             page_range = gr.Radio(
                 choices=page_map.keys(),
@@ -432,10 +593,24 @@ with gr.Blocks(
             with gr.Accordion("Open for More Experimental Options!", open=False):
                 gr.Markdown("#### Experimental")
                 threads = gr.Textbox(
-                    label="number of threads", interactive=True, value="1"
+                    label="number of threads", interactive=True, value="4"
+                )
+                skip_subset_fonts = gr.Checkbox(
+                    label="Skip font subsetting", interactive=True, value=False
+                )
+                ignore_cache = gr.Checkbox(
+                    label="Ignore cache", interactive=True, value=False
+                )
+                vfont = gr.Textbox(
+                    label="Custom formula font regex (vfont)",
+                    interactive=True,
+                    value=ConfigManager.get("PDF2ZH_VFONT", ""),
                 )
                 prompt = gr.Textbox(
                     label="Custom Prompt for llm", interactive=True, visible=False
+                )
+                use_babeldoc = gr.Checkbox(
+                    label="Use BabelDOC", interactive=True, value=False
                 )
                 envs.append(prompt)
 
@@ -445,12 +620,25 @@ with gr.Blocks(
                 for i in range(4):
                     _envs.append(gr.update(visible=False, value=""))
                 for i, env in enumerate(translator.envs.items()):
-                    if env[0] == 'MODELSCOPE_API_KEY':
-                        label = 'MODELSCOPE_API_KEY(必填，免费使用:https://www.modelscope.cn/my/myaccesstoken)'
-                    else:
-                        label = env[0]
+                    label = env[0]
+                    value = ConfigManager.get_env_by_translatername(
+                        translator, env[0], env[1]
+                    )
+                    visible = True
+                    if hidden_gradio_details:
+                        if (
+                            "MODEL" not in str(label).upper()
+                            and value
+                            and hidden_gradio_details
+                        ):
+                            visible = False
+                        # Hidden Keys From Gradio
+                        if "API_KEY" in label.upper():
+                            value = "***"  # We use "***" Present Real API_KEY
                     _envs[i] = gr.update(
-                        visible=True, label=label, value=os.getenv(env[0], env[1])
+                        visible=visible,
+                        label=label,
+                        value=value,
                     )
                 _envs[-1] = gr.update(visible=translator.CustomPrompt)
                 return _envs
@@ -466,6 +654,10 @@ with gr.Blocks(
                     return gr.update(visible=True)
                 else:
                     return gr.update(visible=False)
+
+            def on_vfont_change(value):
+                ConfigManager.set("PDF2ZH_VFONT", value)
+                return value
 
             output_title = gr.Markdown("## Translated", visible=False)
             output_file_mono = gr.File(
@@ -490,6 +682,7 @@ with gr.Blocks(
                 service,
                 envs,
             )
+            vfont.change(on_vfont_change, inputs=vfont, outputs=None)
             file_type.select(
                 on_select_filetype,
                 file_type,
@@ -552,6 +745,10 @@ with gr.Blocks(
             page_input,
             prompt,
             threads,
+            skip_subset_fonts,
+            ignore_cache,
+            vfont,
+            use_babeldoc,
             recaptcha_response,
             state,
             *envs,
@@ -689,4 +886,5 @@ def setup_gui(
 
 # For auto-reloading while developing
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     setup_gui()

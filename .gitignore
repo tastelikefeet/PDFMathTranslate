@@ -135,6 +135,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+pdf2zh-dev/
 
 # Spyder project settings
 .spyderproject
@@ -169,3 +170,5 @@ cython_debug/
 .vscode
 .DS_Store
 uv.lock
+*.pdf
+*.docx
